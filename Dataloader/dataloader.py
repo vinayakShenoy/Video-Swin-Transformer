@@ -1,5 +1,3 @@
-from decord_init import DecordInit
-from decord_decode import DecordDecode
 from sample_frames import SampleFrames
 from raw_frame_decode import RawFrameDecode
 from random_resized_crop import RandomResizedCrop
@@ -140,6 +138,7 @@ class DataLoader:
     def prepare_train_frames(self, idx):
         """Prepare the frames for training given the index."""
         results = copy.deepcopy(self.video_infos[idx])
+        print(results['frame_dir'])
         results['filename_tmpl'] = self.filename_tmpl
         results['modality'] = self.modality
         results['start_index'] = self.start_index

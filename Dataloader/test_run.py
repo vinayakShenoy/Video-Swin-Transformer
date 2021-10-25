@@ -13,17 +13,17 @@ def run_model(model, data, device=torch.device('cuda:0')):
     if next(model.parameters()).is_cuda:
         # scatter to specified GPU
         data = scatter(data, [device])[0]
-
+    print(data['imgs'].shape)
     with torch.no_grad():
-        scores = model(return_loss=False, **data)[0]
-
+        scores = model(return_loss=True, **data)[0]
+        print(scores.shape)
     return scores
 
 
 def prepare_model(config_path, checkpoint_path):
     config = Config.fromfile(config_path)
     config.model.backbone.pretrained = None
-    model = build_recognizer(config.model, test_cfg=config.get('test_cfg'))
+    model = build_recognizer(config.model, train_cfg=config.get('train_cfg'))
 
     device = 'cuda:0'  # or 'cpu'
     device = torch.device(device)
@@ -57,7 +57,7 @@ def main():
     args = args_parser()
     data = get_data(args.annotation_file, args.data_prefix)
     model = prepare_model(args.model_config, args.model_checkpoint)
-    print(run_model(model, data))
+    scores = run_model(model, data)
 
 if __name__ == '__main__':
     main()

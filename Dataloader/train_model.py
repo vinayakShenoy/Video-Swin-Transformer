@@ -82,6 +82,7 @@ def prepare_model(cfg, checkpoint_path, device=torch.device('cuda:0')):
 
     model.cfg = cfg
     model.to(device)
+    print(model)
     return model
 
 

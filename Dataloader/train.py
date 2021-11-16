@@ -1,20 +1,25 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 import mmcv
 from mmcv.runner import load_checkpoint, init_dist, get_dist_info, build_optimizer, set_random_seed
 from mmcv import Config, DictAction
-from mmcv.parallel import collate, scatter
 from mmaction.models import build_recognizer
 from mmaction.datasets import build_dataset, build_dataloader
-from custom_dataset_loader import RawFramesDataset
 
 import argparse
 import os.path as osp
 import copy
+import sys, os
+from tqdm import tqdm
+from scipy.io import savemat
+
+def blockPrint():
+    sys.stdout = open(os.devnull, 'w')
 
 def args_parser():
     parser = argparse.ArgumentParser(description="Arguments for train dataloader")
+    parser.add_argument('--output_mat', help='File name for saved .mat file (TCN)')
     parser.add_argument("--model_checkpoint", type=str, help="Location to model (.pth) file")
     parser.add_argument("--model_config", type=str, help="Locationto config file")
     parser.add_argument("--annotation_file", type=str, help="Path to annotation file")
@@ -68,12 +73,12 @@ def args_parser():
         default='none',
         help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
-
+    parser.add_argument('--feature_extraction', action='store_true')
     args = parser.parse_args()
     return args
 
 
-def prepare_model(cfg, checkpoint_path, device=torch.device('cuda:0')):
+def prepare_model(cfg, args, checkpoint_path, device=torch.device('cuda:0')):
 
     model = build_recognizer(cfg.model,
                              train_cfg=cfg.get('train_cfg'),
@@ -84,25 +89,29 @@ def prepare_model(cfg, checkpoint_path, device=torch.device('cuda:0')):
 
     model.cfg = cfg
     model.to(device)
-    model.cls_head.fc_cls = torch.nn.Linear(in_features=768, out_features=15, bias=True)
+    model.cls_head.fc_cls = torch.nn.Linear(in_features=768, out_features=10, bias=True)
     for param in model.parameters():
         param.requires_grad = False
-    for param in model.backbone.layers[-1].parameters():
-        param.requires_grad = True
-    for param in model.cls_head.parameters():
-        param.requires_grad = True
+    if not args.feature_extraction:
+        #for param in model.backbone.layers[-1].parameters():
+        #    param.requires_grad = True
+        for param in model.cls_head.parameters():
+            param.requires_grad = True
+    else:
+        model.eval()
+    return model.cuda()
 
-    return model
-
-def prepare_dataloader(cfg, annotation_file, data_prefix, batch_size):
+def prepare_dataloader(cfg, shuffle):
     datasets = [build_dataset(cfg.data.train)]
+
     val_dataset = copy.deepcopy(cfg.data.val)
     datasets.append(build_dataset(val_dataset))
     dataloader_setting = dict(
         videos_per_gpu=cfg.data.get('videos_per_gpu', 1) // cfg.optimizer_config.get('update_interval', 1),
         workers_per_gpu=cfg.data.get('workers_per_gpu', 1),
         num_gpus=len(cfg.gpu_ids),
-        dist=False,
+        shuffle=,
+        dist=True,
         seed=cfg.seed)
     dataloader_setting = dict(dataloader_setting,
                               **cfg.data.get('train_dataloader', {}))
@@ -120,18 +129,35 @@ def train_model(model,
                 test=dict(test_best=False, test_last=False)):
 
     optimizer = build_optimizer(model, cfg.optimizer)
-    for ep in range(10):
+    writer = SummaryWriter()
+    #print(iter(dataloader)
+    blockPrint()
+    for ep in tqdm(range(10)):
         running_loss = 0
         for (batch_idx, batch) in enumerate(dataloader):
             optimizer.zero_grad()
-            batch["imgs"], batch["label"] = batch["imgs"].to("cuda"), batch["label"].to("cuda")
+            batch["imgs"], batch["label"] = batch["imgs"].cuda(), batch["label"].cuda()
             loss = model(return_loss=True, **batch)
             loss["loss_cls"].backward()
             optimizer.step()
-            #running_loss += loss["loss_cls"].item()
-            #if batch_idx % 2
-        print(loss)
+            running_loss += loss["loss_cls"].item()
+            if batch_idx % 50 ==0:
+                writer.add_scalar("Loss/Train", running_loss/50, ep*batch_idx/50)
+                running_loss = 0
 
+def extract_feature(model, dataloader):
+    newModel = model.backbone
+    outputs = {}
+    for (batch_idx, batch) in tqdm(enumerate(dataloader)):
+        batch["imgs"], batch["label"] = batch["imgs"].cuda(), batch["label"].cuda()
+        batch["imgs"] = batch["imgs"].reshape((-1,) + batch["imgs"].shape[2:])
+        output = newModel(batch["imgs"])
+        label = batch["label"][0].item()
+        if label not in outputs:
+            outputs[label] = output
+        else:
+            outputs[label] = torch.cat([outputs[label], output], dim=0)
+    return outputs
 
 def main():
     args = args_parser()
@@ -177,12 +203,31 @@ def main():
     cfg.seed = args.seed
     dataloader = prepare_dataloader(cfg, args.annotation_file, args.data_prefix, args.batch_size)
 
-    model = prepare_model(cfg, args.model_checkpoint)
+    model = prepare_model(cfg, args, args.model_checkpoint)
 
-    #test_option = dict(test_last=args.test_last, test_best=args.test_best)
-    """train_model(model,
+    if args.feature_extraction:
+        mat_dict = {}
+        X = None
+        Y = None
+        outputs = extract_feature(model, dataloader)
+        for label in outputs:
+            x = outputs[label].permute(0, 2,1,3,4)
+            x = x.reshape(x.shape[0]*x.shape[1], x.shape[2]*x.shape[3]*x.shape[4])
+            y = torch.tensor([label]*x.shape[0], dtype=torch.float32)
+            if X is None:
+                X = x
+                Y = y
+            else:
+                X = torch.cat([X, x], dim=0)
+                Y = torch.cat([Y, y], dim=0)
+        X = X.detach().cpu().numpy()
+        Y = Y.detach().cpu().numpy()
+        mat_dict = {"X":X, "Y":Y}
+        savemat('test.mat', mat_dict, oned_as='row')
+    else:
+        train_model(model,
                 dataloader,
                 cfg)
-    """
+
 if __name__ == '__main__':
     main()

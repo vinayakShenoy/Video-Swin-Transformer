@@ -5,13 +5,18 @@ import mmcv
 from mmcv.runner import load_checkpoint, init_dist, get_dist_info, build_optimizer, set_random_seed
 from mmcv import Config, DictAction
 from mmaction.models import build_recognizer
-from mmaction.datasets import build_dataset, build_dataloader
 
+from dataloader.dataloaderTCN import DataloaderTCN
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Arguments for Feature extraction")
     parser.add_argument("--model_checkpoint", type=str, help="Location to model (.pth) file")
     parser.add_argument("--model_config", type=str, help="Location to config file")
+    parser.add_argument("--batch_size", type=int)
+    parser.add_argument("--num_workers", type=int)
+    parser.add_argument("--videos_per_gpu", type=int)
+    parser.add_argument("--annotation_file", type=str)
+    parser.add_argument("--data_prefix", type=str)
     parser.add_argument(
         '--gpus',
         type=int,
@@ -29,6 +34,7 @@ def parse_args():
 
 
 def prepare_model(cfg, args, device=torch.device('cuda:0')):
+    print("Here1")
     model = build_recognizer(cfg.model,
                              train_cfg=cfg.get('train_cfg'),
                              test_cfg=cfg.get('test_cfg'))
@@ -39,19 +45,15 @@ def prepare_model(cfg, args, device=torch.device('cuda:0')):
     return model.cuda()
 
 
-def prepare_dataloader(cfg):
-    dataset = build_dataset(cfg.data.train)
-    dataloader_setting = dict(
-        videos_per_gpu= cfg.data.get('videos_per_gpu', 1) // cfg.optimizer_config.get('update_interval', 1),
-        workers_per_gpu= cfg.data.get('workers_per_gpu', 1),
-        num_gpus=len(cfg.gpu_ids),
-        shuffle=False,
-        dist=False,
-        seed=cfg.seed)
-    dataloader_setting = dict(dataloader_setting,
-                              **cfg.data.get('train_dataloader', {}))
-    dataloader = build_dataloader(dataset, **dataloader_setting)
-    return dataloader
+def prepare_dataloader(args):
+    dataloader = DataloaderTCN(args.batch_size,
+                               args.num_workers,
+                               args.videos_per_gpu,
+                               False,
+                               args.annotation_file,
+                               args.data_prefix,
+                               args.seed)
+    return dataloader.get_loader()
 
 def main():
     args = parse_args()
@@ -63,19 +65,15 @@ def main():
     cfg.seed = args.seed
 
     model = prepare_model(cfg, args)
-    dataloader = prepare_dataloader(cfg)
+    dataloader = prepare_dataloader(args)
 
     newModel = model.backbone
 
     for (batchIdx, batch) in enumerate(dataloader):
         frames = batch["imgs"].cuda()
-        #print(frames.shape)
         frames = frames.reshape((-1,) + frames.shape[2:])
-        print(frames.shape)
-        output = newModel(frames)
-        print(output.shape)
-        break
-
+        with torch.no_grad():
+            output = newModel(frames)
 
 if __name__ == '__main__':
     main()

@@ -15,10 +15,10 @@ from .format_shape import FormatShape
 
 
 class RawFramesDataset(Dataset):
-    def __init__(self, annotations_file, img_dir, transform=None, target_transform=None):
-        self.raw_frame_ann = pd.read_csv(annotations_file)
+    def __init__(self, annotations_file, img_dir):
+        self.raw_frame_ann = pd.read_csv(annotations_file, header=None)
         self.img_dir = img_dir
-        self.start_index = 1
+        self.start_index = 0
         self.modality = 'RGB'
         self.filename_tmpl = 'img_{:05}.jpg'
 

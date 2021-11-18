@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import argparse
 
 import mmcv
@@ -17,6 +18,7 @@ def parse_args():
     parser.add_argument("--videos_per_gpu", type=int)
     parser.add_argument("--annotation_file", type=str)
     parser.add_argument("--data_prefix", type=str)
+    parser.add_argument("--transcriptions_dir", type=str)
     parser.add_argument(
         '--gpus',
         type=int,
@@ -34,7 +36,6 @@ def parse_args():
 
 
 def prepare_model(cfg, args, device=torch.device('cuda:0')):
-    print("Here1")
     model = build_recognizer(cfg.model,
                              train_cfg=cfg.get('train_cfg'),
                              test_cfg=cfg.get('test_cfg'))
@@ -55,6 +56,25 @@ def prepare_dataloader(args):
                                args.seed)
     return dataloader.get_loader()
 
+def get_ground_truth(args):
+    video_transcriptions_file = args.annotation_file.split("/")[-1]
+    transcriptions_dir = args.transcriptions_dir
+    transcriptions_file_path = transcriptions_dir + "/" + video_transcriptions_file
+    f = open(transcriptions_file_path)
+    all_lines = f.readlines()
+    gesture_segments = [[[int(line.split()[0]), int(line.split()[1])], int(line.split()[2][1:])-1] for line in all_lines]
+    first_frame = gesture_segments[0][0][0]
+    last_frame = gesture_segments[-1][0][1]
+    final_label = []
+    for frame in range(first_frame, last_frame, 2):
+        for segments in gesture_segments:
+            gesture_label = segments[-1]
+            gesture_start = segments[0][0]
+            gesture_end = segments[0][1]
+            if frame>=gesture_start and frame<=gesture_end:
+                final_label.append([frame, gesture_label])
+    return final_label
+
 def main():
     args = parse_args()
     cfg = Config.fromfile(args.model_config)
@@ -69,11 +89,19 @@ def main():
 
     newModel = model.backbone
 
+    final_gt = get_ground_truth(args)
+    final_output = None
     for (batchIdx, batch) in enumerate(dataloader):
         frames = batch["imgs"].cuda()
         frames = frames.reshape((-1,) + frames.shape[2:])
         with torch.no_grad():
             output = newModel(frames)
+        if final_output is None:
+            final_output = output
+        else:
+            final_output = torch.cat([final_output, output], dim=0)
+    print(final_output.shape)
+    features = {"S": final_output, "Y": np.array(final_gt)}
 
 if __name__ == '__main__':
     main()

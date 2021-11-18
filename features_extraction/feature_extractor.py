@@ -8,6 +8,10 @@ from mmcv import Config, DictAction
 from mmaction.models import build_recognizer
 
 from dataloader.dataloaderTCN import DataloaderTCN
+from scipy.io import savemat
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Arguments for Feature extraction")
@@ -19,6 +23,7 @@ def parse_args():
     parser.add_argument("--annotation_file", type=str)
     parser.add_argument("--data_prefix", type=str)
     parser.add_argument("--transcriptions_dir", type=str)
+    parser.add_argument("--features_output_dir", type=str)
     parser.add_argument(
         '--gpus',
         type=int,
@@ -65,6 +70,9 @@ def get_ground_truth(args):
     gesture_segments = [[[int(line.split()[0]), int(line.split()[1])], int(line.split()[2][1:])-1] for line in all_lines]
     first_frame = gesture_segments[0][0][0]
     last_frame = gesture_segments[-1][0][1]
+    remaining_frames = 32 - (last_frame - first_frame) % 32
+    last_frame += remaining_frames
+    gesture_segments[-1][0][1] += remaining_frames
     final_label = []
     for frame in range(first_frame, last_frame, 2):
         for segments in gesture_segments:
@@ -74,6 +82,12 @@ def get_ground_truth(args):
             if frame>=gesture_start and frame<=gesture_end:
                 final_label.append([frame, gesture_label])
     return final_label
+
+def save_to_mat(S, Y, args):
+    features = {"S": S, "Y": Y}
+    video_transcriptions_file = args.annotation_file.split("/")[-1]
+    mat_file_path = args.features_output_dir + "/" + video_transcriptions_file.split(".")[0] + ".mat"
+    savemat(mat_file_path, features, oned_as='row')
 
 def main():
     args = parse_args()
@@ -100,8 +114,14 @@ def main():
             final_output = output
         else:
             final_output = torch.cat([final_output, output], dim=0)
-    print(final_output.shape)
-    features = {"S": final_output, "Y": np.array(final_gt)}
+
+    final_output = final_output.permute(0, 2, 1, 3, 4)
+    final_output = final_output.reshape(final_output.shape[0]*final_output.shape[1], -1)
+    S = final_output.detach().cpu().numpy()
+    Y = np.array(final_gt)
+    save_to_mat(S, Y, args)
+
+
 
 if __name__ == '__main__':
     main()

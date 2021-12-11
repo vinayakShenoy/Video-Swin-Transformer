@@ -62,6 +62,7 @@ def prepare_dataloader(args):
     return dataloader.get_loader()
 
 def get_ground_truth(args):
+    converter = {0:0, 1:1, 2:2, 3:3, 4:4, 5:5, 7:6, 8:7, 9:8, 10:9}
     video_transcriptions_file = args.annotation_file.split("/")[-1]
     transcriptions_dir = args.transcriptions_dir
     transcriptions_file_path = transcriptions_dir + "/" + video_transcriptions_file
@@ -80,7 +81,7 @@ def get_ground_truth(args):
             gesture_start = segments[0][0]
             gesture_end = segments[0][1]
             if frame>=gesture_start and frame<=gesture_end:
-                final_label.append([frame, gesture_label])
+                final_label.append(converter[gesture_label])
     return final_label
 
 def save_to_mat(S, Y, args):
@@ -101,7 +102,7 @@ def main():
     model = prepare_model(cfg, args)
     dataloader = prepare_dataloader(args)
 
-    newModel = model.backbone
+    modelBackbone = model.backbone
 
     final_gt = get_ground_truth(args)
     final_output = None
@@ -109,19 +110,18 @@ def main():
         frames = batch["imgs"].cuda()
         frames = frames.reshape((-1,) + frames.shape[2:])
         with torch.no_grad():
-            output = newModel(frames)
+            output = modelBackbone(frames)
         if final_output is None:
             final_output = output
         else:
             final_output = torch.cat([final_output, output], dim=0)
-
-    final_output = final_output.permute(0, 2, 1, 3, 4)
+    final_output = final_output.permute(0, 2, 1, 3, 4) # chunks * feature_len * T * H * W => T * feature_len * H * W
+    avgPool = torch.nn.AdaptiveAvgPool2d(1)
+    final_output = avgPool(final_output) # T* feature_len * H * W
     final_output = final_output.reshape(final_output.shape[0]*final_output.shape[1], -1)
     S = final_output.detach().cpu().numpy()
     Y = np.array(final_gt)
     save_to_mat(S, Y, args)
-
-
 
 if __name__ == '__main__':
     main()
